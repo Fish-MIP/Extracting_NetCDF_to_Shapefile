@@ -2,15 +2,11 @@
 title: "Extracting NetCDF data into Shapefiles"
 author: "Julia Blanchard"
 date: "27/01/2022"
-output: html_document
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
 ---
-
-
-This is some example R script that I find useful for extracting data from FishMIP or ISIMIP NetCDF files into shapefiles, such as Large Marine Ecosystems (LMEs), Country EEZs, or regional seas.
-
-First, we will examine a NetCDF file already downloaded from the ISIMIP data portal (data.isimip.org). The filename has a lot of information in it! It is the netcdf of total catches (tc) from EcoOcean in the 3b simulation round of FishMIP, during the historical period (hist).
-
-The modelled netcdf files were downloaded from ISIMIP data portal.
 
 
 ```{r setup, include=FALSE}
@@ -25,17 +21,24 @@ library(ggplot2)
 ```
 
 
-### LME and raster LME
+This is an example R script that may be useful for extracting data from FishMIP or ISIMIP NetCDF files into shapefiles, such as Large Marine Ecosystems (LMEs), Country EEZs, or regional seas.
 
 The LME shapefiles were downloaded from:https://www.sciencebase.gov/catalog/item/55c77722e4b08400b1fd8244
 
 
-
-```{r setup, include=FALSE}
+```{r}
 # read in shapefile
 shape<-st_read("/Users/juliab6/Dropbox/FishMIP 2020:21/FishMIP Repos/LME66/LMEs66.shp")
 
 
+```
+
+
+
+The FishMIP modelled netcdf files were downloaded from ISIMIP data portal. (data.isimip.org). The filename has a lot of information in it! It is the netcdf of total catches (tc) from BOATS in the 3b simulation round of FishMIP, during the historical period (hist).
+
+
+```{r}
 # read in netcdf
 boats<-brick("boats_ipsl-cm6a-lr_nobasd_historical_histsoc_default_tc_global_monthly_1950_2014.nc")
 
@@ -44,41 +47,55 @@ crs(boats) <- crs(shape)
 
 ```
 
+
 A plot of the raster map of catches is here:
 
 
 ```{r}
+boats
 dim(boats) # dimensions x,y, time steps
 plot(boats[[780]])
 ```
 
 ### Crop it and mask the catches to the lmes
 
+Crop it and mask the catches to the lmes.
+
 ```{r}
 temp<-crop(boats, extent(shape))
 boats_lme<-mask(boats, shape)
 plot(boats_lme[[780]])
 ```
-### Convert to df
 
+# Cut to a single LME
 
 ```{r}
 library(dplyr)
-se_aus<-shape[42,]
+se_aus<-shape[46,] # south east Australia
 temp<-crop(boats, extent(se_aus))
-boats_seaus<-mask(boats, se_aus)
+boats_seaus<-mask(temp, se_aus)
 plot(boats_seaus[[780]])
-
-
 
 ```
 
-Get time series by LME
+### Extract time series for single LME
 
 ```{r}
-# Rasterize polygon shapefile.
-lme <-
-  as(st_geometry(shape), 'Spatial')
+ts_se_aus<-extract(boats_seaus, se_aus, fun=mean, na.rm=T, exact=FALSE, weights=FALSE,
+   normalizeWeights=T, cellnumbers=FALSE, small=TRUE, df=T, layer=0, nl=780, 
+   factors=FALSE, sp=FALSE)
+
+plot(2:781,ts_se_aus[-1],ylab="tc",xlab="month")
+
+```
+
+
+
+### Get time series for all LMEs
+
+```{r}
+# Rasterize polygon shapefile - this only works for the first year
+lme <-as(st_geometry(shape), 'Spatial')
 lme <- rasterize(lme, boats,
   background = 0,
   filename = 'lme.grd',
@@ -86,38 +103,46 @@ lme <- rasterize(lme, boats,
 
 crs(lme) <- crs(boats)
 boats_lme <- crop(boats,lme)
-boats_lme_ts<-zonal(boats_lme,lme, "mean")
+boats_lme<-zonal(boats_lme,lme, "mean")
+
 
 # check dimensions
-dim(boats_lme_ts)
-plot(boats_lme_ts[1,])
+dim(boats_lme)
+plot(boats_lme[46,-1],ylab="tc",xlab="month")
+
+# or use extract (verrrrry slow)
+
+# ts_lme<-extract(boats, shape, fun=sum, na.rm=T, exact=FALSE, weights=FALSE,
+#    normalizeWeights=T, cellnumbers=FALSE, small=TRUE, df=T, layer=0, nl=780, 
+#    factors=FALSE, sp=FALSE)
+
+
+
 ```
 
+### Re-arrange data and make a ggplot
 
-
-### Other method using stars and sf packages
 
 ```{r}
-#install.packages("stars")
-#install.packages("sf")
-library(stars)
-library(sf)
+lme_number <- factor(boats_lme[, 1])
+month <- 1:dim(boats_lme)[2]
+boats_lme_ts <- data.frame(
+  Month = rep(month, each = nrow(boats_lme)),
+  LME = rep(lme_number,length(month)),
+  tc = c(boats_lme))
 
-stars_object <- raster::raster("ecoocean_ipsl-cm6a-lr_nobasd_historical_histsoc_default_tc_global_monthly_1950_2014.nc") %>% st_as_stars()
+boats_lme_ts<-boats_lme_ts[boats_lme_ts$Month>1 ,]
 
-plot(stars_object)
+ggplot(boats_lme_ts,aes(x = Month, y = tc,col = LME)) + 
+  geom_line()
 
-sf_object <- sf::st_read("LMEs66.shp")
 
-#Make sure they have the same CRS
-sf::st_crs(stars_object) <- sf::st_crs(sf_object)
 
-plot(sf_object)
-
-stars_object <- stars_object[42]
-
-#plot
-ggplot()+
-  geom_stars(data = stars_object) +
-  geom_sf(data = shape)
 ```
+
+### Resources
+
+https://sesync-ci.github.io/raster-time-series-alaska-lesson/index.html
+
+Faster version of extract() here:
+https://cran.r-project.org/web/packages/exactextractr/exactextractr.pdf
